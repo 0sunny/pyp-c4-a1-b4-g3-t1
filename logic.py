@@ -24,11 +24,15 @@ class Table(object):
         self.duplicates_allowed = duplicates_allowed
         self.indexed = indexed
         self.path = self.name + ".table"
+        self.num_rows = 0
+        self.num_valid_rows = 0
         if not os.path.exists(self.path):
             #Create the file if it doesn't exist.
-            #self._write_metadata()
+            self._write_metadata()
             with open(self.path, 'w') as f:
                 pass
+        else:
+            self.load()
         self.file = None
     
     def _write_metadata(self):
@@ -46,6 +50,43 @@ class Table(object):
         number of rows of data
         number of valid rows of data
         """
+        with open(self.path + ".metadata", 'w') as f:
+            f.write(self.name + "\n")
+            f.write("\n")
+            f.write(",".join(self.columns) + "\n")
+            if self.column_types is not None:
+                f.write(",".join(self.column_types) + "\n")
+            else:
+                f.write(str(None) + "\n")
+            if self.column_none_allowed is not None:
+                f.write(",".join(self.columns_none_allowed) + "\n")
+            else:
+                f.write(str(None) + "\n")
+            f.write(str(self.indexed) + "\n")
+            f.write(str(self.duplicates_allowed) + "\n")
+            f.write(str(self.num_rows) + "\n")
+            f.write(str(self.num_valid_rows) + "\n")
+
+    def load(self):
+        """Load the table from the file, useful to make this persistent."""
+        #load the metadata and update the attribute variables.
+        with open(self.path + ".metadata", 'r') as f:
+            self.name = f.readline()[:-1]
+            f.readline()
+            self.columns = tuple(f.readline()[:-1].split(","))
+            self.column_types = tuple(f.readline()[:-1].split(","))
+            self.column_none_allowed = tuple(f.readline()[:-1].split(","))
+            if f.readline()[:-1] == 'True':
+                self.indexed = True
+            else:
+                self.indexed = False
+            if f.readline()[:-1] == 'True':
+                self.duplicates_allowed = True
+            else:
+                self.duplicates_allowed = False
+            self.num_rows = int(f.readline()[:-1])
+            self.num_valid_rows = int(f.readline()[:-1])
+                
     
     def _is_column_name_valid(self):
         """Make sure that the column do not end with __, as is it used for better
@@ -67,6 +108,7 @@ class Table(object):
     def __next__(self):
         try:
             res = next(self)
+            res = ",".join(res.strip().split(",")[2:])
         except StopIteration:
             self.file.close()
             raise StopIteration
@@ -81,17 +123,20 @@ class Table(object):
     
     def insert(self, row):
         """Insert the row which is a tuple of strings into the table."""
-        row = tuple(str(i) for i in row)
         if self.file and not self.file.closed:
             self.file.close()
         with open(self.path, 'a') as self.file:
+            row = (str(self.num_rows + 1), '1') + tuple(str(i) for i in row)
             self.file.write(",".join(row))
             self.file.write("\n")
+            self.num_rows += 1
+            self.num_valid_rows += 1
 
     def insert_rows(self, rows):
         """Insert the rows into the table."""
         #Can modify later to chunk the rows for insertion
-        val = "\n".join([",".join([str(i) for i in row]) for row in rows])
+        val = "\n".join([",".join([str(self.num_rows + i + 1), '1'] + 
+        [str(it) for it in row]) for i,row in enumerate(rows)])
         if self.file and not self.file.closed:
             self.file.close()
         with open(self.path, 'a') as self.file:
@@ -104,32 +149,40 @@ class Table(object):
     
     def query(self, **kwargs):
         """Find the row with the given information as in the kwargs.
-        Can change it to find the rows with given index."""
+        Can change it to find the rows with given index. 
+        Returns a list of tuples, each tuple being the line number and data"""
         #index_ stores the index as key and the value to be matched as value
         index_ = {}
         for key, value in kwargs.iteritems():
             try:
                 index_[self.columns.index(key)] = str(value)
             except ValueError:
-                raise e.ColumnNotFoundError()
+                #raise e.ColumnNotFoundError()
+                print("Column {} not found".format(key))
+                pass
         #print(index_)
-                
+        
+        res = []    
         if index_ is not None:
             #row = ",".join((str(i) for i in row))
             for i, curr_row in enumerate(self):
-                curr = curr_row.strip().split(",")
-                #print(curr_row.strip().split(","))
-                if all(curr[k] == v for k,v in index_.iteritems()):
+                temp = curr_row.strip().split(",")
+                valid = temp[1]
+                curr = temp[2:]
+                #print(curr, "Current row")
+                if valid != '0' and all(curr[k] == v for k,v in index_.iteritems()):
                     print("Found")
-                    return ",".join(curr)
-        return None
+                    res.append(",".join(curr))
+        if res == []:
+            return None
+        else:
+            return res
     
     def delete(self, row = None, **kwargs):
         """Delete the given row or delete the rows with the information from the
         kwargs."""
-    
-    def load(self):
-        """Load the table from the file, useful to make this persistent."""
+        
+
 
 class Database(object):
     """Class Structure for the database."""
@@ -137,7 +190,7 @@ class Database(object):
     def __init__(self, name):
         self.name = name
         self.path = self.name + ".db"
-        self.tables = []
+        self.table_names = []
         if not os.path.exists(self.path):
             #Create the file if it doesn't exist.
             #self._write_metadata()
@@ -149,14 +202,14 @@ class Database(object):
     indexed = False):
         """Creates the table and returns the table object. If table already 
         exists, then prints the information and returns None."""
-        if table_name in self.tables:#hasattr(self, table_name):
+        if table_name in self.table_names:#hasattr(self, table_name):
             #raise TableAlreadyExistsError()
             print("Table already exists, please choose a different name.")
             return None
         tb = Table(table_name, columns, column_types, column_none_allowed, 
         duplicates_allowed, indexed)
         setattr(self, table_name, tb)
-        self.tables.append(table_name)
+        self.table_names.append(table_name)
         return getattr(self, table_name)
     
     def delete_table(self, table_name):
@@ -165,7 +218,7 @@ class Database(object):
             #Delete the table
             #print("Deleted the table succesfully.")
             os.remove(getattr(self, table_name).path)
-            self.tables.remvove(table_name)
+            self.table_names.remvove(table_name)
             delattr(self, table_name)
             return True
             pass
@@ -173,5 +226,16 @@ class Database(object):
             print("The table doesn't exist.")
             return False
     
+    def _write_metadata(self):
+        """Write the table metadata into the file."""
+        #This part would be to make the database persistent
+        """
+        #Metadata format:
+        Name
+        """
+        with open(self.path + ".metadata", 'w') as f:
+            f.write(self.name + "\n")
+    
     def load(self):
         """Load the database from the file. Useful for persistence."""
+        #Nothing to update
